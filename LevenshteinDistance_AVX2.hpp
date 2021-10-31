@@ -8,6 +8,7 @@
 #include <vector>
 #include <algorithm>
 #include <limits>
+#include <tuple>
 
 #ifdef __SSE4_1__
 #include <nmmintrin.h>
