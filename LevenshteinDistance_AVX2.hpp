@@ -56,7 +56,7 @@ uint64_t levenshtein_distance(const std::string_view str1, const std::string_vie
 namespace LevenshteinDistansAVX2{
 template<typename Container>
 uint32_t levenshtein_distance_nosimd(const Container& str1, const Container& str2){
-    const auto& [short_str, long_str] = (str1.size() < str2.size() ? std::tie(str1,str2) : std::tie(str2, str1));
+    const auto [short_str, long_str] = (str1.size() < str2.size() ? std::tie(str1,str2) : std::tie(str2, str1));
     struct Dist{
         std::vector<uint32_t> dist;
         const std::size_t n;
@@ -295,23 +295,23 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
     if(str1.size() + str2.size() > static_cast<typename Container::size_type>(std::numeric_limits<int32_t>::max())){
         throw std::runtime_error("Given container size is too big.");
     }
-    const auto& [short_str_view, long_str_view] = (str1.size() < str2.size() ? std::tie(str1,str2) : std::tie(str2, str1));
+    const auto [short_str_view, long_str_view] = (str1.size() < str2.size() ? std::tie(str1,str2) : std::tie(str2, str1));
     #ifdef __SSE4_1__
     if(short_str_view.size() < 8) return levenshtein_distance_nosimd(short_str_view, long_str_view);
     #else
     return levenshtein_distance_nosimd(short_str_view, long_str_view);
     #endif
-    const auto short_str = [&short_str_view](){
+    const auto short_str = [](const auto& short_str_view) {
         std::vector<typename Container::value_type> str(short_str_view.size() + 8 - short_str_view.size() % 8);
         str.resize(short_str_view.size());
         std::reverse_copy(short_str_view.cbegin(), short_str_view.cend(), str.begin());
         return str;
-    }();
-    const auto long_str = [&long_str_view](){
+    }(short_str_view);
+    const auto long_str = [](const auto& long_str_view) {
         std::vector<typename Container::value_type> str(long_str_view.cbegin(), long_str_view.cend());
         str.reserve(long_str_view.size() + 8 - long_str_view.size() % 8);
         return str;
-    }();
+    }(long_str_view);
     
     std::vector<uint32_t> dist((short_str.size() + 1) * 3, 0);
     const auto cord_to_idx = [w = short_str.size() + 1](std::size_t diagonal, std::size_t elm){
