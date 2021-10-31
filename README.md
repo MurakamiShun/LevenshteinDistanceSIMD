@@ -1,5 +1,5 @@
 # LevenshteinDistance_AVX2
-calculate levenshtein distance faaaaast with AVX2/SSE4.1.
+LevenshteinDistance_AVX2 is C++17 header for calculate the Levenshtein distance faaaaast with AVX2/SSE4.1.
 
 # Usage
 Call `LevenshteinDistansAVX2::levenshtein_distance_simd`.
