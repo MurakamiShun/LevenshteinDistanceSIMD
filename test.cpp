@@ -37,28 +37,25 @@ std::u32string gen32(std::size_t length){
     return buff;
 }
 int main() {
-    std::string str2;
-    std::string str1;
     std::mt19937 mt{std::random_device{}()};
 
-    const uint32_t len = 1000;
+    const uint32_t len = 500;
 
+    std::vector<std::tuple<std::string, std::string>> test_data;
+    for(auto i=0; i < 1000; ++i) test_data.push_back({gen(len), gen(len)});
+    
     auto start = std::chrono::system_clock::now();
     int64_t total = 0;
-    for(auto i=0; i < 10000; ++i){
-        str1 = gen(mt()%len+1);
-        str2 = gen(mt()%len+1);
-        total += LevenshteinDistansSIMD::levenshtein_distance_nosimd(str1, str2);
+    for(const auto& [str1, str2] : test_data){
+        total += LevenshteinDistansAVX2::levenshtein_distance_nosimd(str1, str2);
     }
     std::cout << (std::chrono::system_clock::now() - start).count() << std::endl;
     std::cout << total << std::endl;
 
     start = std::chrono::system_clock::now();
     total = 0;
-    for(auto i=0; i < 10000; ++i){
-        str1 = gen(mt()%len+1);
-        str2 = gen(mt()%len+1);
-        total += LevenshteinDistansSIMD::levenshtein_distance_simd(str1, str2);
+    for(const auto& [str1, str2] : test_data){
+        total += LevenshteinDistansAVX2::levenshtein_distance_simd(str1, str2);
     }
     std::cout << (std::chrono::system_clock::now() - start).count() << std::endl;
     std::cout << total << std::endl;
