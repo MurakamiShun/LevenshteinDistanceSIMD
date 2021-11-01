@@ -47,7 +47,7 @@ int main() {
     auto start = std::chrono::system_clock::now();
     int64_t total = 0;
     for(const auto& [str1, str2] : test_data){
-        total += LevenshteinDistansAVX2::levenshtein_distance_nosimd(str1, str2);
+        total += LevenshteinDistansSIMD::levenshtein_distance_nosimd(str1, str2);
     }
     std::cout << (std::chrono::system_clock::now() - start).count() << std::endl;
     std::cout << total << std::endl;
@@ -55,7 +55,7 @@ int main() {
     start = std::chrono::system_clock::now();
     total = 0;
     for(const auto& [str1, str2] : test_data){
-        total += LevenshteinDistansAVX2::levenshtein_distance_simd(str1, str2);
+        total += LevenshteinDistansSIMD::levenshtein_distance_simd(str1, str2);
     }
     std::cout << (std::chrono::system_clock::now() - start).count() << std::endl;
     std::cout << total << std::endl;
