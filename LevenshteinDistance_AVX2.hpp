@@ -18,6 +18,10 @@
 #include <immintrin.h>
 #endif
 
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+#endif
+
 /*
 uint64_t levenshtein_distance(const std::string_view str1, const std::string_view str2){
     std::vector<uint64_t> dist((str1.size() + 1) * (str2.size() + 1), 0);
@@ -229,6 +233,58 @@ void do_sse(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin,
 }
 #endif
 
+#ifdef __ARM_NEON
+template<typename Cord, typename Container, typename CordToIdx>
+void do_neon(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin, std::size_t diag, const Container& short_str, const Container& long_str, const CordToIdx& cord_to_idx){
+    constexpr std::size_t lane = 4; // i32x4
+    std::size_t n = elm_begin;
+    for(; n + lane-1 < cord.loopend(diag, short_str.size(), long_str.size()); n+=lane){
+        auto [x, y] = cord.xy(diag, n, short_str.size());        
+        uint32x4_t del = vaddq_u32(
+            vld1q_u32(&dist[cord.del(cord_to_idx, diag, n)]),
+            vmovq_n_u32(1)
+        ); // delete
+        uint32x4_t ins = vaddq_u32(
+            vld1q_u32(&dist[cord.ins(cord_to_idx, diag, n)]),
+            vmovq_n_u32(1)
+        ); // insert
+        uint32x4_t rep = vld1q_u32(&dist[cord.rep(cord_to_idx, diag, n)]); // just load replace
+        if constexpr(sizeof(typename Container::value_type) == sizeof(uint32_t)){
+            rep = vaddq_u32(
+                rep,
+                vandq_u32(vmvnq_u32(vceqq_u32(
+                    vld1q_u32(reinterpret_cast<const uint32_t*>(&short_str[short_str.size()-1 - x])), // reversed
+                    vld1q_u32(reinterpret_cast<const uint32_t*>(&long_str[y]))
+                )), vmovq_n_u32(1))
+            ); 
+        }
+        else if constexpr(sizeof(typename Container::value_type) == sizeof(uint16_t)){
+            rep = vaddq_u32(
+                rep,
+                vandq_u32(vmvnq_u32(vceqq_u32(
+                    vmovl_u16(vld1_u16(reinterpret_cast<const uint16_t*>(&short_str[short_str.size()-1 - x]))), // reversed
+                    vmovl_u16(vld1_u16(reinterpret_cast<const uint16_t*>(&long_str[y])))
+                )), vmovq_n_u32(1))
+            );
+        }
+        else if constexpr(sizeof(typename Container::value_type) == sizeof(uint8_t)){
+            rep = vaddq_u32(
+                rep,
+                vandq_u32(vmvnq_u32(vceqq_u32(
+                    vmovl_u16(vget_low_u16(vmovl_u8(vld1_u8(reinterpret_cast<const uint8_t*>(&short_str[short_str.size()-1 - x]))))), // reversed
+                    vmovl_u16(vget_low_u16(vmovl_u8(vld1_u8(reinterpret_cast<const uint8_t*>(&long_str[y])))))
+                )), vmovq_n_u32(1))
+            ); 
+        }
+        vst1q_u32(
+            &dist[cord_to_idx(diag, n)],
+            vminq_u32(vminq_u32(del, ins), rep)
+        );
+    }
+    do_scalar(cord, dist, n, diag, short_str, long_str, cord_to_idx);
+}
+#endif
+
 #ifdef __AVX2__
 template<typename Cord, typename Container, typename CordToIdx>
 void do_avx(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin, std::size_t diag, const Container& short_str, const Container& long_str, const CordToIdx& cord_to_idx){
@@ -296,11 +352,15 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
         throw std::runtime_error("Given container size is too big.");
     }
     const auto [short_str_view, long_str_view] = (str1.size() < str2.size() ? std::tie(str1,str2) : std::tie(str2, str1));
+    
     #ifdef __SSE4_1__
-    if(short_str_view.size() < 8) return levenshtein_distance_nosimd(short_str_view, long_str_view);
+    if(short_str_view.size() < 12) return levenshtein_distance_nosimd(short_str_view, long_str_view);
+    #elif defined(__ARM_NEON)
+    if(short_str_view.size() < 12) return levenshtein_distance_nosimd(short_str_view, long_str_view);
     #else
     return levenshtein_distance_nosimd(short_str_view, long_str_view);
     #endif
+    
     const auto short_str = [](const auto& short_str_view) {
         std::vector<typename Container::value_type> str(short_str_view.size() + 8 - short_str_view.size() % 8);
         str.resize(short_str_view.size());
@@ -330,7 +390,10 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
         detail::do_avx(detail::x_axis, dist, 1,  diagonal, short_str, long_str, cord_to_idx);
         #elif defined(__SSE4_1__)
         detail::do_sse(detail::x_axis, dist, 1,  diagonal, short_str, long_str, cord_to_idx);
+        #elif defined(__ARM_NEON)
+        detail::do_neon(detail::x_axis, dist, 1,  diagonal, short_str, long_str, cord_to_idx);
         #endif
+        
     }
     // flap back
     if(diagonal <= long_str.size()) dist[cord_to_idx(diagonal, short_str.size())] = diagonal;
@@ -338,7 +401,10 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
     detail::do_avx(detail::flap_back, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
     #elif defined(__SSE4_1__)
     detail::do_sse(detail::flap_back, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
+    #elif defined(__ARM_NEON)
+    detail::do_neon(detail::flap_back, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
     #endif
+    
     ++diagonal;
     // y axis
     for(; diagonal < (short_str.size() + long_str.size() + 1); ++diagonal){
@@ -347,7 +413,10 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
         detail::do_avx(detail::y_axis, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
         #elif defined(__SSE4_1__)
         detail::do_sse(detail::y_axis, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
+        #elif defined(__ARM_NEON)
+        detail::do_neon(detail::y_axis, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
         #endif
+        
     }
     
     return dist[cord_to_idx(short_str.size() + long_str.size(), 0)];
