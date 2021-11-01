@@ -2,7 +2,7 @@
 #include <string_view>
 #include <chrono>
 #include <random>
-#include "LevenshteinDistance_AVX2.hpp"
+#include "LevenshteinDistanceSIMD.hpp"
 
 char gen_char(){
     static std::mt19937 mt{std::random_device{}()};
@@ -48,7 +48,7 @@ int main() {
     for(auto i=0; i < 10000; ++i){
         str1 = gen(mt()%len+1);
         str2 = gen(mt()%len+1);
-        total += LevenshteinDistansAVX2::levenshtein_distance_nosimd(str1, str2);
+        total += LevenshteinDistansSIMD::levenshtein_distance_nosimd(str1, str2);
     }
     std::cout << (std::chrono::system_clock::now() - start).count() << std::endl;
     std::cout << total << std::endl;
@@ -58,7 +58,7 @@ int main() {
     for(auto i=0; i < 10000; ++i){
         str1 = gen(mt()%len+1);
         str2 = gen(mt()%len+1);
-        total += LevenshteinDistansAVX2::levenshtein_distance_simd(str1, str2);
+        total += LevenshteinDistansSIMD::levenshtein_distance_simd(str1, str2);
     }
     std::cout << (std::chrono::system_clock::now() - start).count() << std::endl;
     std::cout << total << std::endl;
