@@ -1,5 +1,5 @@
 /*
- * LevenshteinDistans_AVX2: https://github.com/MurakamiShun/LevenshteinDistance_AVX2
+ * LevenshteinDistansSIMD: https://github.com/MurakamiShun/LevenshteinDistanceSIMD
  * Copyright (c) 2021 Murakami Shun
  * 
  * Released under the MIT Lisence.
@@ -57,7 +57,7 @@ uint64_t levenshtein_distance(const std::string_view str1, const std::string_vie
     return dist[cord_to_idx(str1.size(), str2.size())];
 }
 */
-namespace LevenshteinDistansAVX2{
+namespace LevenshteinDistansSIMD{
 template<typename Container>
 uint32_t levenshtein_distance_nosimd(const Container& str1, const Container& str2){
     const auto [short_str, long_str] = (str1.size() < str2.size() ? std::tie(str1,str2) : std::tie(str2, str1));
@@ -421,4 +421,4 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
     
     return dist[cord_to_idx(short_str.size() + long_str.size(), 0)];
 }
-} // namespace LevenshteinDistansAVX2
+} // namespace LevenshteinDistansSIMD
