@@ -1,11 +1,11 @@
-# LevenshteinDistance_AVX2
-LevenshteinDistance_AVX2 is C++17 header for calculate the Levenshtein distance faaaaast with AVX2/SSE4.1.
+# LevenshteinDistanceSIMD
+LevenshteinDistanceSIMD is C++17 header for calculate the Levenshtein distance faaaaast with AVX2/SSE4.1 and ASIMD(NEON).
 
 # Usage
-Call `LevenshteinDistansAVX2::levenshtein_distance_simd`.
+Call `LevenshteinDistansSIMD::levenshtein_distance_simd`.
 ```
 template<typename Container>
-uint32_t LevenshteinDistansAVX2::levenshtein_distance_simd(const Container& str1, const Container& str2){
+uint32_t LevenshteinDistansSIMD::levenshtein_distance_simd(const Container& str1, const Container& str2){
   /* Conditions */
   static_assert(
       sizeof(typename Container::value_type) == sizeof(int32_t)
