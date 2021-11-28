@@ -65,7 +65,6 @@ uint32_t levenshtein_distance_nosimd(const Container& str1, const Container& str
         uint32_t* dist;
         const std::size_t n;
         Dist(const Container& str):
-        dist_array{0},
         n(str.size()){
             if(n > 8){
                 dist_vec = std::vector<uint32_t>(n * 2);
@@ -83,12 +82,14 @@ uint32_t levenshtein_distance_nosimd(const Container& str1, const Container& str
         }
     } dist(short_str);
     for(std::size_t y = 1; y <= long_str.size(); ++y){
+        uint32_t latest_set = y;
         for(std::size_t x = 1; x <= short_str.size(); ++x){
-            dist.set(x, y, (std::min)((std::min)(
-                dist(x - 1, y)     + 1,
+            latest_set = (std::min)((std::min)(
+                latest_set + 1,
                 dist(x,     y - 1) + 1),
                 dist(x - 1, y - 1) + (short_str[x-1] == long_str[y-1] ? 0 : 1)
-            ));
+            );
+            dist.set(x, y, latest_set);
         }
     }
     return dist(short_str.size(), long_str.size());
@@ -96,50 +97,83 @@ uint32_t levenshtein_distance_nosimd(const Container& str1, const Container& str
 
 namespace detail{
 template<typename Container>
+uint32_t levenshtein_distance_very_small(const Container& short_str, const Container& long_str){
+    #ifdef __SSE4_1__
+    constexpr auto max_short_size = 6;
+    #elif defined(__ARM_NEON)
+    constexpr auto max_short_size = 8;
+    #endif
+    std::array<std::size_t, max_short_size*2+2> data;
+    for(std::size_t x = 0; x <= short_str.size(); ++x) data[x* 2] = x;
+
+    for(std::size_t y = 1; y <= long_str.size(); ++y){
+        auto latest_set = data[y&1] = y;
+        struct {
+            std::size_t set,ins,rep;
+        } idxs = {2+(y&1), 2+((~y)&1), (~y)&1};
+        for(std::size_t x = 0; x < short_str.size(); ++x){
+            latest_set = data[idxs.set] = (std::min)((std::min)(
+                latest_set + 1,
+                data[idxs.ins] + 1),
+                data[idxs.rep] + (short_str[x] == long_str[y-1] ? 0 : 1)
+            );
+            idxs.set += 2;
+            idxs.ins += 2;
+            idxs.rep += 2;
+        }
+    }
+    return static_cast<uint32_t>(data[short_str.size()*2 + (long_str.size()&1)]);
+}
+
+#if defined(__SSE4_1__) || defined(__ARM_NEON)
+template<typename Container>
 uint32_t levenshtein_distance_simd_backward_and_forward(const Container& short_str, const Container& long_str){
     /*
      *       M  F  O  K  H  E  L  
      *    0  1  2  3  4  5  6  7 
-     * D  1  1 → → → → → ↙
-     * B  2  2 →  3  4  5  6  7 
+     * D  1  1  →  →  →  →  →  ↙
+     * B  2  2  →  3  4  5  6  7 
      * M  3  2  3  3  4  5  6  7 
      * N  4  3  3  4  4  5  6  7 
      * E  5  4  4  4  5  5  5 ← 
-     * K  6  ↗ ← ← ← ← ← 6
+     * K  6  ↗  ←  ←  ←  ←  ←  6
      * calculate backward and forward
      */
 
     #ifdef __SSE4_1__
-    constexpr auto max_short_size = 8;
-    constexpr auto reserve_long_size = 24;
+    constexpr auto reserve_short_size = 12;
+    constexpr auto reserve_long_size = 16;
     struct alignas(16) x2int : std::array<uint64_t, 2>{};
     #elif defined(__ARM_NEON)
-    constexpr auto max_short_size = 12;
+    constexpr auto reserve_short_size = 12;
     constexpr auto reserve_long_size = 24;
     struct alignas(16) x2int : std::array<uint32_t, 2>{};
     #endif
-    std::array<x2int, max_short_size*2+2> data{0}; // requires C++17 or later
-    const x2int y_idx{
-        static_cast<typename x2int::value_type>(0),
-        static_cast<typename x2int::value_type>(short_str.size()+1)
-    };
-    for(std::size_t x = 1; x <= short_str.size(); ++x){
-        data[x] = x2int{
-            static_cast<typename x2int::value_type>(x),
-            static_cast<typename x2int::value_type>(x)
-        };
-    }
-    std::array<x2int, max_short_size> short_str_copy;
-    for(std::size_t x = 0; x < short_str.size(); ++x){
-        short_str_copy[x] = x2int{
-            static_cast<typename x2int::value_type>(short_str[short_str.size() - x - 1]),
-            static_cast<typename x2int::value_type>(short_str[x])
-        };
-    }
-
+    std::array<x2int, reserve_short_size*2+2> data_array;
+    std::vector<x2int> data_vec;
+    x2int* const data = [&](){
+        if(reserve_short_size < short_str.size()){
+            data_vec.resize(short_str.size()*2+2);
+            return data_vec.data();
+        }
+        else{
+            return data_array.data();
+        }
+    }();
+    std::array<x2int, reserve_short_size> short_str_copy_array;
     std::array<x2int, reserve_long_size> long_str_copy_array;
+    std::vector<x2int> short_str_copy_vec;
     std::vector<x2int> long_str_copy_vec;
-    x2int* long_str_copy = [&](){
+    x2int* const short_str_copy = [&](){
+        if(reserve_short_size < short_str.size()){
+            short_str_copy_vec.resize(short_str.size());
+            return short_str_copy_vec.data();
+        }
+        else{
+            return short_str_copy_array.data();
+        }
+    }();
+    x2int* const long_str_copy = [&](){
         if(reserve_long_size < long_str.size()){
             long_str_copy_vec.resize(long_str.size());
             return long_str_copy_vec.data();
@@ -148,101 +182,107 @@ uint32_t levenshtein_distance_simd_backward_and_forward(const Container& short_s
             return long_str_copy_array.data();
         }
     }();
-    for(std::size_t x = 0; x < long_str.size(); ++x){
-        long_str_copy[x] = x2int{
-            static_cast<typename x2int::value_type>(long_str[long_str.size() - x - 1]),
-            static_cast<typename x2int::value_type>(long_str[x])
-        };
-    }
-
     const auto is_odd = long_str.size()&1;
     
+    for(std::size_t i = 0, r = short_str.size() - 1; i < short_str.size()/2 + (short_str.size()&1); ++i, --r){
+        short_str_copy[i] = x2int{
+            static_cast<typename x2int::value_type>(short_str[r]),
+            static_cast<typename x2int::value_type>(short_str[i])
+        };
+        short_str_copy[r] = x2int{ short_str_copy[i][1], short_str_copy[i][0] };
+    }
+    
+    for(std::size_t i = 0, r = long_str.size() - 1; i < long_str.size()/2 + is_odd; ++i, --r){
+        long_str_copy[i] = x2int{
+            static_cast<typename x2int::value_type>(long_str[r]),
+            static_cast<typename x2int::value_type>(long_str[i])
+        };
+        long_str_copy[r] = x2int{ long_str_copy[i][1], long_str_copy[i][0] };
+    }
+    
     #ifdef __SSE4_1__
-    auto idx_offset = _mm_set_epi64x(0, short_str.size()+1);
+    for(std::size_t x = 0; x <= short_str.size(); ++x){
+        _mm_store_si128(reinterpret_cast<__m128i*>(&data[x*2]), _mm_set1_epi64x(x));
+    }
+
     for(std::size_t y = 1; y <= long_str.size()/2 + is_odd; ++y){
         const auto long_chars = _mm_load_si128(reinterpret_cast<__m128i*>(&long_str_copy[y-1]));
-        auto del_ins_idx = _mm_add_epi64(
-            idx_offset,
-            _mm_set_epi64x(1,0)
-        );
-        auto set_rep_idx = _mm_add_epi64(
-            idx_offset,
-            _mm_set_epi64x(0,1)
-        );
-        idx_offset = _mm_castpd_si128(_mm_shuffle_pd(
-            _mm_castsi128_pd(idx_offset),
-            _mm_castsi128_pd(idx_offset),
-            1
-        ));
-        _mm_store_si128(reinterpret_cast<__m128i*>(&data[y_idx[y&1]]), _mm_set1_epi64x(y));
-        
-        for(std::size_t x = 1; x <= short_str.size(); ++x){
-            const auto short_chars = _mm_load_si128(reinterpret_cast<__m128i*>(&short_str_copy[x-1]));
-            const auto del = _mm_add_epi64(_mm_load_si128(reinterpret_cast<__m128i*>(&data[_mm_extract_epi64(del_ins_idx,0)])), _mm_set1_epi64x(1));
-            const auto ins = _mm_add_epi64(_mm_load_si128(reinterpret_cast<__m128i*>(&data[_mm_extract_epi64(del_ins_idx,1)])), _mm_set1_epi64x(1));
+        struct {
+            std::size_t set,ins,rep;
+        } idxs = {2+(y&1), 2+((~y)&1), (~y)&1};
+
+        auto latest_set = _mm_set1_epi64x(y);
+        _mm_store_si128(reinterpret_cast<__m128i*>(&data[y&1]), latest_set);
+        for(std::size_t x = 0; x < short_str.size(); ++x){
+            const auto short_chars = _mm_load_si128(reinterpret_cast<__m128i*>(&short_str_copy[x]));
+            const auto del = _mm_add_epi64(latest_set, _mm_set1_epi64x(1));
+            const auto ins = _mm_add_epi64(_mm_load_si128(reinterpret_cast<__m128i*>(&data[idxs.ins])), _mm_set1_epi64x(1));
             const auto rep = _mm_add_epi64(
-                _mm_load_si128(reinterpret_cast<__m128i*>(&data[_mm_extract_epi64(set_rep_idx,1)])),
+                _mm_load_si128(reinterpret_cast<__m128i*>(&data[idxs.rep])),
                 _mm_andnot_si128(
                     _mm_cmpeq_epi64(short_chars, long_chars),
                     _mm_set1_epi64x(1)
                 )
             );
             // distance < uint32_max
-            _mm_store_si128(reinterpret_cast<__m128i*>(&data[_mm_extract_epi64(set_rep_idx,0)]), _mm_min_epu32(_mm_min_epu32(
+            latest_set = _mm_min_epu32(_mm_min_epu32(
                 del,
                 ins),
                 rep
-            ));
-            del_ins_idx =_mm_add_epi64(del_ins_idx, _mm_set1_epi64x(1));
-            set_rep_idx =_mm_add_epi64(set_rep_idx, _mm_set1_epi64x(1));
+            );
+            _mm_store_si128(reinterpret_cast<__m128i*>(&data[idxs.set]), latest_set);
+            idxs.set += 2;
+            idxs.ins += 2;
+            idxs.rep += 2;
         }
     }
     #elif defined(__ARM_NEON)
-    auto idx_offset = uint32x2_t{static_cast<uint32_t>(short_str.size() + 1), 0};
+    for(std::size_t x = 0; x <= short_str.size(); ++x){
+        vst1_u32(&data[x*2][0], vmov_n_u32(x));
+    }
+
     for(std::size_t y = 1; y <= long_str.size()/2 + is_odd; ++y){
         const auto long_chars = vld1_u32(&long_str_copy[y-1][0]);
-        auto del_ins_idx = vadd_u32(
-            idx_offset,
-            uint32x2_t{0,1}
-        );
-        auto set_rep_idx = vadd_u32(
-            idx_offset,
-            uint32x2_t{1,0}
-        );
-        idx_offset = vrev64_u32(idx_offset);
-        vst1_u32(&data[y_idx[y&1]][0], vmov_n_u32(y));
-        
-        for(std::size_t x = 1; x <= short_str.size(); ++x){
-            const auto short_chars = vld1_u32(&short_str_copy[x-1][0]);
-            const auto del = vadd_u32(vld1_u32(&data[vdups_lane_u32(del_ins_idx,0)][0]), vmov_n_u32(1));
-            const auto ins = vadd_u32(vld1_u32(&data[vdups_lane_u32(del_ins_idx,1)][0]), vmov_n_u32(1));
+        struct {
+            std::size_t set,ins,rep;
+        } idxs = {2+(y&1), 2+((~y)&1), (~y)&1};
+        auto latest_set = vmov_n_u32(y);
+        vst1_u32(&data[y&1][0], latest_set);
+        for(std::size_t x = 0; x < short_str.size(); ++x){
+            const auto short_chars = vld1_u32(&short_str_copy[x][0]);
+            const auto del = vadd_u32(latest_set, vmov_n_u32(1));
+            const auto ins = vadd_u32(vld1_u32(&data[idxs.ins][0]), vmov_n_u32(1));
             const auto rep = vadd_u32(
-                vld1_u32(&data[vdups_lane_u32(set_rep_idx,1)][0]),
+                vld1_u32(&data[idxs.rep][0]),
                 vand_u32(
                     vmvn_u32(vceq_u32(short_chars, long_chars)),
                     vmov_n_u32(1)
                 )
             );
             // distance < uint32_max
-            vst1_u32(&data[vdups_lane_u32(set_rep_idx,0)][0], vmin_u32(vmin_u32(
+            latest_set = vmin_u32(vmin_u32(
                 del,
                 ins),
                 rep
-            ));
-            del_ins_idx = vadd_u32(del_ins_idx, vmov_n_u32(1));
-            set_rep_idx = vadd_u32(set_rep_idx, vmov_n_u32(1));
+            );
+            vst1_u32(&data[idxs.set][0], latest_set);
+            idxs.set += 2;
+            idxs.ins += 2;
+            idxs.rep += 2;
         }
     }
     #endif
     
     const auto y = long_str.size()/2;
-    auto min_value = data[y_idx[(y+is_odd)&1]][1] + data[short_str.size() + y_idx[y&1]][0];
+    auto min_value = data[(y+is_odd)&1][1] + data[short_str.size()*2 + (y&1)][0];
     for(std::size_t x = 1; x <= short_str.size(); ++x){
-        const auto val = data[x + y_idx[(y+is_odd)&1]][1] + data[short_str.size() - x + y_idx[y&1]][0];
-        if(min_value > val) min_value = val;
+        const auto val = data[x*2 + ((y+is_odd)&1)][1] + data[(short_str.size() - x)*2 + (y&1)][0];
+        min_value = (std::min)(min_value, val);
     }
     return min_value;
 }
+#endif
+
 template<class XY, class LoopEnd, class DeleteCord, class InsertCord, class ReplaceCord>
 struct CordSet{
     XY xy;
@@ -280,7 +320,6 @@ constexpr CordSet y_axis{
 };
 
 template<typename Cord, typename Container, typename CordToIdx>
-// requires (sizeof(typename Container::value_type) <= sizeof(uint32_t))
 void do_scalar(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin, std::size_t diag, const Container& short_str, const Container& long_str, const CordToIdx& cord_to_idx){
     const auto end_idx = cord.loopend(diag, short_str.size(), long_str.size());
     for(std::size_t n = elm_begin; n < end_idx; ++n){
@@ -293,8 +332,8 @@ void do_scalar(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_beg
     }
 }
 #ifdef __ARM_NEON
-template<typename Cord, typename Container, typename CordToIdx>
-void do_neon(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin, std::size_t diag, const Container& short_str, const Container& long_str, const CordToIdx& cord_to_idx){
+template<typename Cord, typename CordToIdx>
+void do_neon(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin, std::size_t diag, const std::vector<uint32_t>& short_str, const std::vector<uint32_t>& long_str, const CordToIdx& cord_to_idx){
     constexpr std::size_t lane = 4; // i32x4
     const auto end_idx = cord.loopend(diag, short_str.size(), long_str.size());
 
@@ -309,33 +348,14 @@ void do_neon(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin
             vmovq_n_u32(1)
         ); // insert
         uint32x4_t rep = vld1q_u32(&dist[cord.rep(cord_to_idx, diag, n)]); // just load replace
-        if constexpr(sizeof(typename Container::value_type) == sizeof(uint32_t)){
-            rep = vaddq_u32(
-                rep,
-                vandq_u32(vmvnq_u32(vceqq_u32(
-                    vld1q_u32(reinterpret_cast<const uint32_t*>(&short_str[short_str.size()-1 - x])), // reversed
-                    vld1q_u32(reinterpret_cast<const uint32_t*>(&long_str[y]))
-                )), vmovq_n_u32(1))
-            ); 
-        }
-        else if constexpr(sizeof(typename Container::value_type) == sizeof(uint16_t)){
-            rep = vaddq_u32(
-                rep,
-                vandq_u32(vmvnq_u32(vceqq_u32(
-                    vmovl_u16(vld1_u16(reinterpret_cast<const uint16_t*>(&short_str[short_str.size()-1 - x]))), // reversed
-                    vmovl_u16(vld1_u16(reinterpret_cast<const uint16_t*>(&long_str[y])))
-                )), vmovq_n_u32(1))
-            );
-        }
-        else if constexpr(sizeof(typename Container::value_type) == sizeof(uint8_t)){
-            rep = vaddq_u32(
-                rep,
-                vandq_u32(vmvnq_u32(vceqq_u32(
-                    vmovl_u16(vget_low_u16(vmovl_u8(vld1_u8(reinterpret_cast<const uint8_t*>(&short_str[short_str.size()-1 - x]))))), // reversed
-                    vmovl_u16(vget_low_u16(vmovl_u8(vld1_u8(reinterpret_cast<const uint8_t*>(&long_str[y])))))
-                )), vmovq_n_u32(1))
-            ); 
-        }
+        rep = vaddq_u32(
+            rep,
+            vandq_u32(vmvnq_u32(vceqq_u32(
+                vld1q_u32(reinterpret_cast<const uint32_t*>(&short_str[short_str.size()-1 - x])), // reversed
+                vld1q_u32(reinterpret_cast<const uint32_t*>(&long_str[y]))
+            )), vmovq_n_u32(1))
+        ); 
+        
         vst1q_u32(
             &dist[cord_to_idx(diag, n)],
             vminq_u32(vminq_u32(del, ins), rep)
@@ -346,8 +366,8 @@ void do_neon(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin
 }
 #endif
 #ifdef __SSE4_1__
-template<typename Cord, typename Container, typename CordToIdx>
-void do_sse(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin, std::size_t diag, const Container& short_str, const Container& long_str, const CordToIdx& cord_to_idx){
+template<typename Cord, typename CordToIdx>
+void do_sse(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin, std::size_t diag, const std::vector<uint32_t>& short_str, const std::vector<uint32_t>& long_str, const CordToIdx& cord_to_idx){
     constexpr std::size_t lane = 4; // i32x4
     const auto end_idx = cord.loopend(diag, short_str.size(), long_str.size());
 
@@ -362,33 +382,13 @@ void do_sse(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin,
             _mm_set1_epi32(1)
         ); // insert
         __m128i rep = _mm_loadu_si128(reinterpret_cast<__m128i*>(&dist[cord.rep(cord_to_idx, diag, n)])); // just load replace
-        if constexpr(sizeof(typename Container::value_type) == sizeof(uint32_t)){
-            rep = _mm_add_epi32(
-                rep,
-                _mm_andnot_si128(_mm_cmpeq_epi32(
-                    _mm_loadu_si128(reinterpret_cast<const __m128i*>(&short_str[short_str.size()-1 - x])), // reversed
-                    _mm_loadu_si128(reinterpret_cast<const __m128i*>(&long_str[y]))
-                ), _mm_set1_epi32(1))
-            ); 
-        }
-        else if constexpr(sizeof(typename Container::value_type) == sizeof(uint16_t)){
-            rep = _mm_add_epi32(
-                rep,
-                _mm_andnot_si128(_mm_cmpeq_epi32(
-                    _mm_cvtepi16_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(&short_str[short_str.size()-1 - x]))), // reversed
-                    _mm_cvtepi16_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(&long_str[y])))
-                ), _mm_set1_epi32(1))
-            );
-        }
-        else if constexpr(sizeof(typename Container::value_type) == sizeof(uint8_t)){
-            rep = _mm_add_epi32(
-                rep,
-                _mm_andnot_si128(_mm_cmpeq_epi32(
-                    _mm_cvtepi8_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(&short_str[short_str.size()-1 - x]))), // reversed
-                    _mm_cvtepi8_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(&long_str[y])))
-                ), _mm_set1_epi32(1))
-            ); 
-        }
+        rep = _mm_add_epi32(
+            rep,
+            _mm_andnot_si128(_mm_cmpeq_epi32(
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(&short_str[short_str.size()-1 - x])), // reversed
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(&long_str[y]))
+            ), _mm_set1_epi32(1))
+        );
         _mm_storeu_si128(
             reinterpret_cast<__m128i*>(&dist[cord_to_idx(diag, n)]),
             _mm_min_epi32(_mm_min_epi32(del, ins), rep)
@@ -399,8 +399,8 @@ void do_sse(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin,
 }
 #endif
 #ifdef __AVX2__
-template<typename Cord, typename Container, typename CordToIdx>
-void do_avx(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin, std::size_t diag, const Container& short_str, const Container& long_str, const CordToIdx& cord_to_idx){
+template<typename Cord, typename CordToIdx>
+void do_avx(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin, std::size_t diag, const std::vector<uint32_t>& short_str, const std::vector<uint32_t>& long_str, const CordToIdx& cord_to_idx){
     constexpr std::size_t lane = 8; // i32x8
 
     const auto end_idx = cord.loopend(diag, short_str.size(), long_str.size());
@@ -415,33 +415,13 @@ void do_avx(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin,
             _mm256_set1_epi32(1)
         ); // insert
         __m256i rep = _mm256_loadu_si256(reinterpret_cast<__m256i*>(&dist[cord.rep(cord_to_idx, diag, n)])); // just load replace
-        if constexpr(sizeof(typename Container::value_type) == sizeof(uint32_t)){
-            rep = _mm256_add_epi32(
-                rep,
-                _mm256_andnot_si256(_mm256_cmpeq_epi32(
-                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&short_str[short_str.size()-1 - x])), // reversed
-                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&long_str[y]))
-                ), _mm256_set1_epi32(1))
-            ); 
-        }
-        else if constexpr(sizeof(typename Container::value_type) == sizeof(uint16_t)){
-            rep = _mm256_add_epi32(
-                rep,
-                _mm256_andnot_si256(_mm256_cmpeq_epi32(
-                    _mm256_cvtepi16_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(&short_str[short_str.size()-1 - x]))), // reversed
-                    _mm256_cvtepi16_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(&long_str[y])))
-                ), _mm256_set1_epi32(1))
-            );
-        }
-        else if constexpr(sizeof(typename Container::value_type) == sizeof(uint8_t)){
-            rep = _mm256_add_epi32(
-                rep,
-                _mm256_andnot_si256(_mm256_cmpeq_epi32(
-                    _mm256_cvtepi8_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(&short_str[short_str.size()-1 - x]))), // reversed
-                    _mm256_cvtepi8_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(&long_str[y])))
-                ), _mm256_set1_epi32(1))
-            ); 
-        }
+        rep = _mm256_add_epi32(
+            rep,
+            _mm256_andnot_si256(_mm256_cmpeq_epi32(
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&short_str[short_str.size()-1 - x])), // reversed
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&long_str[y]))
+            ), _mm256_set1_epi32(1))
+        ); 
         _mm256_storeu_si256(
             reinterpret_cast<__m256i*>(&dist[cord_to_idx(diag, n)]),
             _mm256_min_epi32(_mm256_min_epi32(del, ins), rep)
@@ -466,22 +446,21 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
     const auto [short_str_view, long_str_view] = (str1.size() < str2.size() ? std::tie(str1,str2) : std::tie(str2, str1));
     
     #ifdef __SSE4_1__
-    if(short_str_view.size() < 8){
-        if(long_str_view.size() < 10) return levenshtein_distance_nosimd(short_str_view, long_str_view);
+    if(short_str_view.size() < 48){
+        if(long_str_view.size() < 8) return detail::levenshtein_distance_very_small(short_str_view, long_str_view);
         return detail::levenshtein_distance_simd_backward_and_forward(short_str_view, long_str_view);
     }
     #elif defined(__ARM_NEON)
-    if(short_str_view.size() < 12){
-        if(long_str_view.size() < 6) return levenshtein_distance_nosimd(short_str_view, long_str_view);
+    if(short_str_view.size() < 32){
+        if(long_str_view.size() < 8) return detail::levenshtein_distance_very_small(short_str_view, long_str_view);
         return detail::levenshtein_distance_simd_backward_and_forward(short_str_view, long_str_view);
     }
     #else
-    // faster than simple DP due to optimized memory access
-    if(short_str_view.size() < 12) return levenshtein_distance_nosimd(short_str_view, long_str_view);
+    return levenshtein_distance_nosimd(short_str_view, long_str_view);
     #endif
     
-    const auto short_str = std::vector<typename Container::value_type>(std::reverse_iterator(short_str_view.cend()), std::reverse_iterator(short_str_view.cbegin()));
-    const auto long_str = std::vector<typename Container::value_type>(long_str_view.cbegin(), long_str_view.cend());
+    const auto short_str = std::vector<uint32_t>(std::reverse_iterator(short_str_view.cend()), std::reverse_iterator(short_str_view.cbegin()));
+    const auto long_str = std::vector<uint32_t>(long_str_view.cbegin(), long_str_view.cend());
     
     std::vector<uint32_t> dist((short_str.size() + 1) * 3, 0);
     const auto cord_to_idx = [w = short_str.size() + 1](std::size_t diagonal, std::size_t elm){
