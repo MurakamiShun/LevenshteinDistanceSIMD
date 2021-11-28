@@ -6,11 +6,12 @@
  */
 #pragma once
 #include <vector>
+#include <array>
 #include <algorithm>
 #include <limits>
 #include <tuple>
 
-#ifdef __SSE4_1__
+#if defined(__SSE4_1__) || defined(__AVX__)
 #include <nmmintrin.h>
 #endif
 
@@ -98,8 +99,8 @@ uint32_t levenshtein_distance_nosimd(const Container& str1, const Container& str
 namespace detail{
 template<typename Container>
 uint32_t levenshtein_distance_very_small(const Container& short_str, const Container& long_str){
-    #ifdef __SSE4_1__
-    constexpr auto max_short_size = 6;
+    #if defined(__SSE4_1__) || defined(__AVX__)
+    constexpr auto max_short_size = 8;
     #elif defined(__ARM_NEON)
     constexpr auto max_short_size = 8;
     #endif
@@ -125,7 +126,7 @@ uint32_t levenshtein_distance_very_small(const Container& short_str, const Conta
     return static_cast<uint32_t>(data[short_str.size()*2 + (long_str.size()&1)]);
 }
 
-#if defined(__SSE4_1__) || defined(__ARM_NEON)
+#if defined(__SSE4_1__) || defined(__AVX__) || defined(__ARM_NEON)
 template<typename Container>
 uint32_t levenshtein_distance_simd_backward_and_forward(const Container& short_str, const Container& long_str){
     /*
@@ -140,7 +141,7 @@ uint32_t levenshtein_distance_simd_backward_and_forward(const Container& short_s
      * calculate backward and forward
      */
 
-    #ifdef __SSE4_1__
+    #if defined(__SSE4_1__) || defined(__AVX__)
     constexpr auto reserve_short_size = 12;
     constexpr auto reserve_long_size = 16;
     struct alignas(16) x2int : std::array<uint64_t, 2>{};
@@ -200,7 +201,7 @@ uint32_t levenshtein_distance_simd_backward_and_forward(const Container& short_s
         long_str_copy[r] = x2int{ long_str_copy[i][1], long_str_copy[i][0] };
     }
     
-    #ifdef __SSE4_1__
+    #if defined(__SSE4_1__) || defined(__AVX__)
     for(std::size_t x = 0; x <= short_str.size(); ++x){
         _mm_store_si128(reinterpret_cast<__m128i*>(&data[x*2]), _mm_set1_epi64x(x));
     }
@@ -365,7 +366,7 @@ void do_neon(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin
     do_scalar(cord, dist, next_idx, diag, short_str, long_str, cord_to_idx);
 }
 #endif
-#ifdef __SSE4_1__
+#if defined(__SSE4_1__) || defined(__AVX__)
 template<typename Cord, typename CordToIdx>
 void do_sse(const Cord cord, std::vector<uint32_t>& dist, std::size_t elm_begin, std::size_t diag, const std::vector<uint32_t>& short_str, const std::vector<uint32_t>& long_str, const CordToIdx& cord_to_idx){
     constexpr std::size_t lane = 4; // i32x4
@@ -445,9 +446,9 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
     }
     const auto [short_str_view, long_str_view] = (str1.size() < str2.size() ? std::tie(str1,str2) : std::tie(str2, str1));
     
-    #ifdef __SSE4_1__
+    #if defined(__SSE4_1__) || defined(__AVX__)
     if(short_str_view.size() < 48){
-        if(long_str_view.size() < 6) return detail::levenshtein_distance_very_small(short_str_view, long_str_view);
+        if(long_str_view.size() < 8) return detail::levenshtein_distance_very_small(short_str_view, long_str_view);
         return detail::levenshtein_distance_simd_backward_and_forward(short_str_view, long_str_view);
     }
     #elif defined(__ARM_NEON)
@@ -477,7 +478,7 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
         
         #ifdef __AVX2__
         detail::do_avx(detail::x_axis, dist, 1,  diagonal, short_str, long_str, cord_to_idx);
-        #elif defined(__SSE4_1__)
+        #elif defined(__SSE4_1__) || defined(__AVX__)
         detail::do_sse(detail::x_axis, dist, 1,  diagonal, short_str, long_str, cord_to_idx);
         #elif defined(__ARM_NEON)
         detail::do_neon(detail::x_axis, dist, 1,  diagonal, short_str, long_str, cord_to_idx);
@@ -491,7 +492,7 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
     if(diagonal <= long_str.size()) dist[cord_to_idx(diagonal, short_str.size())] = diagonal;
     #ifdef __AVX2__
     detail::do_avx(detail::flap_back, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
-    #elif defined(__SSE4_1__)
+    #elif defined(__SSE4_1__) || defined(__AVX__)
     detail::do_sse(detail::flap_back, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
     #elif defined(__ARM_NEON)
     detail::do_neon(detail::flap_back, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
@@ -506,7 +507,7 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
         
         #ifdef __AVX2__
         detail::do_avx(detail::y_axis, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
-        #elif defined(__SSE4_1__)
+        #elif defined(__SSE4_1__) || defined(__AVX__)
         detail::do_sse(detail::y_axis, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
         #elif defined(__ARM_NEON)
         detail::do_neon(detail::y_axis, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
