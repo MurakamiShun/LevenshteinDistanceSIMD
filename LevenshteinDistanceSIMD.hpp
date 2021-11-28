@@ -447,7 +447,7 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
     
     #ifdef __SSE4_1__
     if(short_str_view.size() < 48){
-        if(long_str_view.size() < 8) return detail::levenshtein_distance_very_small(short_str_view, long_str_view);
+        if(long_str_view.size() < 6) return detail::levenshtein_distance_very_small(short_str_view, long_str_view);
         return detail::levenshtein_distance_simd_backward_and_forward(short_str_view, long_str_view);
     }
     #elif defined(__ARM_NEON)
