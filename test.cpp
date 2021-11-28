@@ -39,24 +39,26 @@ std::u32string gen32(std::size_t length){
 int main() {
     std::mt19937 mt{std::random_device{}()};
 
-    const uint32_t len = 500;
+    const uint32_t len = 12;
 
     std::vector<std::tuple<std::string, std::string>> test_data;
-    for(auto i=0; i < 1000; ++i) test_data.push_back({gen(len), gen(len)});
+    for(auto i=0; i < 1000000; ++i) test_data.push_back({gen(mt()%len), gen(mt()%len)});
     
     auto start = std::chrono::system_clock::now();
     int64_t total = 0;
+    
     for(const auto& [str1, str2] : test_data){
         total += LevenshteinDistansSIMD::levenshtein_distance_nosimd(str1, str2);
     }
-    std::cout << (std::chrono::system_clock::now() - start).count() << std::endl;
+    std::cout << "time:" << (std::chrono::system_clock::now() - start).count() << std::endl;
     std::cout << total << std::endl;
+    
 
     start = std::chrono::system_clock::now();
     total = 0;
     for(const auto& [str1, str2] : test_data){
         total += LevenshteinDistansSIMD::levenshtein_distance_simd(str1, str2);
     }
-    std::cout << (std::chrono::system_clock::now() - start).count() << std::endl;
+    std::cout << "time:" << (std::chrono::system_clock::now() - start).count() << std::endl;
     std::cout << total << std::endl;
 }
