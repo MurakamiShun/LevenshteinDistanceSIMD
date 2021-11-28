@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <limits>
 #include <tuple>
+#include <stdexcept>
 
 #if defined(__SSE4_1__) || defined(__AVX__)
 #include <nmmintrin.h>
@@ -72,18 +73,20 @@ uint32_t levenshtein_distance_nosimd(const Container& str1, const Container& str
                 dist = dist_vec.data();
             }
             else dist = dist_array.data();
-            for(std::size_t x = 0; x < n; ++x) dist[x] = x + 1;
+            for(std::size_t x = 0; x < n; ++x){
+                dist[x] = static_cast<uint32_t>(x + 1);
+            }
         }
         void set(std::size_t x, std::size_t y, uint32_t val) {
             dist[x - 1 + (y%2)*n] = val;
         }
         uint32_t operator()(std::size_t x, std::size_t y) const {
-            if(x == 0) return y;
+            if(x == 0) return static_cast<uint32_t>(y);
             else return dist[x - 1 + (y%2)*n];
         }
     } dist(short_str);
     for(std::size_t y = 1; y <= long_str.size(); ++y){
-        uint32_t latest_set = y;
+        uint32_t latest_set = static_cast<uint32_t>(y);
         for(std::size_t x = 1; x <= short_str.size(); ++x){
             latest_set = (std::min)((std::min)(
                 latest_set + 1,
@@ -280,7 +283,7 @@ uint32_t levenshtein_distance_simd_backward_and_forward(const Container& short_s
         const auto val = data[x*2 + ((y+is_odd)&1)][1] + data[(short_str.size() - x)*2 + (y&1)][0];
         min_value = (std::min)(min_value, val);
     }
-    return min_value;
+    return static_cast<uint32_t>(min_value);
 }
 #endif
 
@@ -297,16 +300,16 @@ template<class XY, class LoopEnd, class DeleteCord, class InsertCord, class Repl
 CordSet(XY, LoopEnd, DeleteCord, InsertCord, ReplaceCord) -> CordSet<XY, LoopEnd, DeleteCord, InsertCord, ReplaceCord>;
 
 constexpr CordSet x_axis{
-    [](std::size_t diag, std::size_t n, std::size_t short_len){ return std::make_tuple(diag - n - 1, n - 1); },
-    [](std::size_t diag, std::size_t short_len, std::size_t long_len){ return std::min(short_len, diag); },
+    [](std::size_t diag, std::size_t n,[[maybe_unused]] std::size_t short_len){ return std::make_tuple(diag - n - 1, n - 1); },
+    [](std::size_t diag, std::size_t short_len, [[maybe_unused]]std::size_t long_len){ return std::min(short_len, diag); },
     [](const auto& cord_to_idx, std::size_t diag, std::size_t n){ return cord_to_idx(diag - 1, n - 1); },
     [](const auto& cord_to_idx, std::size_t diag, std::size_t n){ return cord_to_idx(diag - 1, n); },
     [](const auto& cord_to_idx, std::size_t diag, std::size_t n){ return cord_to_idx(diag - 2, n - 1); }
 };
 
 constexpr CordSet flap_back{
-    [](std::size_t diag, std::size_t n, std::size_t short_len){ return std::make_tuple(short_len - n - 1, n);},
-    [](std::size_t diag, std::size_t short_len, std::size_t long_len){ return short_len; },
+    []([[maybe_unused]]std::size_t diag, std::size_t n, std::size_t short_len){ return std::make_tuple(short_len - n - 1, n);},
+    []([[maybe_unused]]std::size_t diag, std::size_t short_len, [[maybe_unused]]std::size_t long_len){ return short_len; },
     [](const auto& cord_to_idx, std::size_t diag, std::size_t n){ return cord_to_idx(diag - 1, n); },
     [](const auto& cord_to_idx, std::size_t diag, std::size_t n){ return cord_to_idx(diag - 1, n + 1); },
     [](const auto& cord_to_idx, std::size_t diag, std::size_t n){ return cord_to_idx(diag - 2, n); }
@@ -473,8 +476,8 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
     // x axis
     std::size_t diagonal = 2;
     for(; diagonal <= short_str.size(); ++diagonal){
-        dist[cord_to_idx(diagonal, 0)] = diagonal;
-        dist[cord_to_idx(diagonal, diagonal)] = diagonal;
+        dist[cord_to_idx(diagonal, 0)] = static_cast<uint32_t>(diagonal);
+        dist[cord_to_idx(diagonal, diagonal)] = static_cast<uint32_t>(diagonal);
         
         #ifdef __AVX2__
         detail::do_avx(detail::x_axis, dist, 1,  diagonal, short_str, long_str, cord_to_idx);
@@ -489,7 +492,9 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
     }
     // flap back
     
-    if(diagonal <= long_str.size()) dist[cord_to_idx(diagonal, short_str.size())] = diagonal;
+    if(diagonal <= long_str.size()){
+        dist[cord_to_idx(diagonal, short_str.size())] = static_cast<uint32_t>(diagonal);
+    }
     #ifdef __AVX2__
     detail::do_avx(detail::flap_back, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
     #elif defined(__SSE4_1__) || defined(__AVX__)
@@ -503,8 +508,9 @@ uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2)
     ++diagonal;
     // y axis
     for(; diagonal < (short_str.size() + long_str.size() + 1); ++diagonal){
-        if(diagonal <= long_str.size()) dist[cord_to_idx(diagonal, short_str.size())] = diagonal;
-        
+        if(diagonal <= long_str.size()){
+            dist[cord_to_idx(diagonal, short_str.size())] = static_cast<uint32_t>(diagonal);
+        }
         #ifdef __AVX2__
         detail::do_avx(detail::y_axis, dist, 0,  diagonal, short_str, long_str, cord_to_idx);
         #elif defined(__SSE4_1__) || defined(__AVX__)
