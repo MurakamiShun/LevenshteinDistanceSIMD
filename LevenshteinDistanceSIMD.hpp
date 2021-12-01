@@ -260,23 +260,28 @@ CordSet(XY, LoopEnd, DeleteCord, InsertCord, ReplaceCord, SetCord) -> CordSet<XY
 
 template<typename Container>
 uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Container& long_str_view){
+    /*
+     *       M  F  O  K  H  E  L  
+     *    0  1  2  3  4  5  6  7 
+     * D  1  ↙ ↙ ↙ ↙ ↙ ↙ ↙
+     * B  2  2  2  3  4  5  6  ↙ 
+     * M  3  2  3  3  4  5  6  ↙ 
+     * N  4  3  3  4  4  5  6  ↙ 
+     * E  5  4  4  4  5  5  5  ↙
+     * calculate along diagonal
+     */
+    
     const std::vector<uint32_t> short_str(std::reverse_iterator(short_str_view.cend()), std::reverse_iterator(short_str_view.cbegin()));
     const std::vector<uint32_t> long_str(long_str_view.cbegin(), long_str_view.cend());
-    
-    std::vector<uint32_t> dist((short_str.size() + 1) * 4);
-    const std::array<std::size_t, 4> idx_offset{
-        0,
-        short_str.size() + 1,
-        (short_str.size() + 1)*2,
-        (short_str.size() + 1)*3
-    };
-    const auto cord_to_idx = [&short_str, &idx_offset](const std::size_t diagonal, const std::size_t elm) constexpr noexcept {
-        return idx_offset[diagonal&3] + elm;
+    const auto reserve_size = short_str.size() + 1 + (short_str.size()%256 == 255); // cache collision miss prevention (L1=8kB*n)
+    std::vector<uint32_t> dist(reserve_size * 4);
+    const auto cord_to_idx = [&short_str, reserve_size](const std::size_t diagonal, const std::size_t elm) noexcept {
+        return (diagonal & 3)*(reserve_size) + elm;
     };
 
     const CordSet x_axis{
-        [](const std::size_t diag, const std::size_t n) noexcept { return std::make_tuple(diag - n - 1, n - 1); },
-        [&short_str](const std::size_t diag) noexcept { return std::min(short_str.size(), diag); },
+        [&short_str](const std::size_t diag, const std::size_t n) noexcept { return std::make_tuple(short_str.size() - diag + n, n - 1); },
+        [&short_str](const std::size_t diag) noexcept { return (std::min)(short_str.size(), diag); },
         [cord_to_idx](const std::size_t diag, const std::size_t n) noexcept { return cord_to_idx(diag - 1, n - 1); },
         [cord_to_idx](const std::size_t diag, const std::size_t n) noexcept { return cord_to_idx(diag - 1, n); },
         [cord_to_idx](const std::size_t diag, const std::size_t n) noexcept { return cord_to_idx(diag - 2, n - 1); },
@@ -284,7 +289,7 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
     };
 
     const CordSet flap_back{
-        [&short_str]([[maybe_unused]]const std::size_t diag, const std::size_t n) noexcept { return std::make_tuple(short_str.size() - n - 1, n);},
+        []([[maybe_unused]]const std::size_t diag, const std::size_t n) noexcept { return std::make_tuple(n, n);},
         [&short_str]([[maybe_unused]]const std::size_t diag) noexcept { return short_str.size(); },
         [cord_to_idx](const std::size_t diag, const std::size_t n) noexcept { return cord_to_idx(diag - 1, n); },
         [cord_to_idx](const std::size_t diag, const std::size_t n) noexcept { return cord_to_idx(diag - 1, n + 1); },
@@ -293,7 +298,7 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
     };
 
     const CordSet y_axis{
-        [&short_str](const std::size_t diag, const std::size_t n) noexcept { return std::make_tuple(short_str.size() - n - 1, diag - short_str.size() + n - 1);},
+        [&short_str](const std::size_t diag, const std::size_t n) noexcept { return std::make_tuple(n, diag - short_str.size() + n - 1);},
         [&short_str, &long_str](const std::size_t diag) noexcept { return (std::min)(short_str.size(), short_str.size() + long_str.size() + 1 - diag); },
         [cord_to_idx](const std::size_t diag, const std::size_t n) noexcept { return cord_to_idx(diag - 1, n); },
         [cord_to_idx](const std::size_t diag, const std::size_t n) noexcept { return cord_to_idx(diag - 1, n + 1); },
@@ -308,7 +313,7 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
             dist[cord.set(diag, n)] = (std::min)((std::min)(
                 dist[cord.del(diag, n)] + 1,  // delele
                 dist[cord.ins(diag, n)] + 1), // insert
-                dist[cord.rep(diag, n)] + (short_str[short_str.size() - 1 - x] == long_str[y] ? 0 : 1) // replace
+                dist[cord.rep(diag, n)] + (short_str[x] == long_str[y] ? 0 : 1) // replace
             );
         }
     };
@@ -317,7 +322,8 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
     const auto do_neon = [&short_str, &long_str, &dist](const auto& cord, const std::size_t diag, const std::size_t elm_begin) {
         constexpr std::size_t lane = 4; // i32x4
         const auto end_idx = cord.loopend(diag);
-        for(std::size_t n = elm_begin; n + lane <= end_idx; n+=lane){
+        const auto next_idx = end_idx - (end_idx - elm_begin) % lane;
+        for(std::size_t n = elm_begin; n < next_idx; n+=lane){
             const auto [x, y] = cord.xy(diag, n);        
             uint32x4_t del = vaddq_u32(
                 vld1q_u32(&dist[cord.del(diag, n)]),
@@ -331,7 +337,7 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
             rep = vaddq_u32(
                 rep,
                 vandq_u32(vmvnq_u32(vceqq_u32(
-                    vld1q_u32(&short_str[short_str.size() - 1 - x]), // reversed
+                    vld1q_u32(&short_str[x]), // reversed
                     vld1q_u32(&long_str[y])
                 )), vmovq_n_u32(1))
             ); 
@@ -341,7 +347,6 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
                 vminq_u32(vminq_u32(del, ins), rep)
             );
         }
-        const auto next_idx = end_idx - (end_idx - elm_begin) % lane;
         return next_idx;
     };
     #endif
@@ -350,7 +355,8 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
     const auto do_sse = [&short_str, &long_str, &dist](const auto& cord, const std::size_t diag, const std::size_t elm_begin){
         constexpr std::size_t lane = 4; // i32x4
         const auto end_idx = cord.loopend(diag);
-        for(std::size_t n = elm_begin; n + lane <= end_idx; n+=lane){
+        const auto next_idx = end_idx - (end_idx - elm_begin) % lane;
+        for(std::size_t n = elm_begin; n < next_idx; n+=lane){
             const auto [x, y] = cord.xy(diag, n);
             __m128i del = _mm_add_epi32(
                 _mm_loadu_si128(reinterpret_cast<__m128i*>(&dist[cord.del(diag, n)])),
@@ -364,7 +370,7 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
             rep = _mm_add_epi32(
                 rep,
                 _mm_andnot_si128(_mm_cmpeq_epi32(
-                    _mm_loadu_si128(reinterpret_cast<const __m128i*>(&short_str[short_str.size() - 1 - x])), // reversed
+                    _mm_loadu_si128(reinterpret_cast<const __m128i*>(&short_str[x])), // reversed
                     _mm_loadu_si128(reinterpret_cast<const __m128i*>(&long_str[y]))
                 ), _mm_set1_epi32(1))
             );
@@ -373,7 +379,6 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
                 _mm_min_epi32(_mm_min_epi32(del, ins), rep)
             );
         }
-        const auto next_idx = end_idx - (end_idx - elm_begin) % lane;
         return next_idx;
     };
     #endif
@@ -382,7 +387,8 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
     const auto do_avx = [&short_str, &long_str, &dist](const auto& cord, const std::size_t diag, const std::size_t elm_begin){
         constexpr std::size_t lane = 8; // i32x8
         const auto end_idx = cord.loopend(diag);
-        for(std::size_t n = elm_begin; n + lane <= end_idx; n+=lane){
+        const auto next_idx = end_idx - (end_idx - elm_begin) % lane;
+        for(std::size_t n = elm_begin; n < next_idx; n+=lane){
             const auto [x, y] = cord.xy(diag, n);
             __m256i del = _mm256_add_epi32(
                 _mm256_loadu_si256(reinterpret_cast<__m256i*>(&dist[cord.del(diag, n)])),
@@ -396,7 +402,7 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
             rep = _mm256_add_epi32(
                 rep,
                 _mm256_andnot_si256(_mm256_cmpeq_epi32(
-                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&short_str[short_str.size() - 1 - x])), // reversed
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&short_str[x])), // reversed
                     _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&long_str[y]))
                 ), _mm256_set1_epi32(1))
             );
@@ -405,7 +411,6 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
                 _mm256_min_epi32(_mm256_min_epi32(del, ins), rep)
             );
         }
-        const auto next_idx = end_idx - (end_idx - elm_begin) % lane;
         return next_idx;
     };
     #endif
@@ -435,10 +440,8 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
         
     }
     // flap back
+    dist[cord_to_idx(diagonal, short_str.size())] = static_cast<uint32_t>(diagonal);
     
-    if(diagonal <= long_str.size()){
-        dist[cord_to_idx(diagonal, short_str.size())] = static_cast<uint32_t>(diagonal);
-    }
     #ifdef __AVX2__
     auto next_n = do_avx(flap_back, diagonal, 0);
     next_n = do_sse(flap_back, diagonal, next_n);
