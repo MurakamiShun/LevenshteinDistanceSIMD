@@ -382,7 +382,7 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
         return next_idx;
     };
     #endif
-
+    /*
     #ifdef __AVX2__
     const auto do_avx = [&short_str, &long_str, &dist](const auto& cord, const std::size_t diag, const std::size_t elm_begin){
         constexpr std::size_t lane = 8; // i32x8
@@ -414,6 +414,7 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
         return next_idx;
     };
     #endif
+    */
 
     // initialize
     dist[cord_to_idx(1, 0)] = 1;
@@ -424,11 +425,7 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
         dist[cord_to_idx(diagonal, 0)] = static_cast<uint32_t>(diagonal);
         dist[cord_to_idx(diagonal, diagonal)] = static_cast<uint32_t>(diagonal);
         
-        #ifdef __AVX2__
-        auto next_n = do_avx(x_axis, diagonal, 1);
-        next_n = do_sse(x_axis, diagonal, next_n);
-        do_scalar(x_axis, diagonal, next_n);
-        #elif defined(__SSE4_1__) || defined(__AVX__)
+        #if defined(__SSE4_1__) || defined(__AVX__)
         auto next_n = do_sse(x_axis, diagonal, 1);
         do_scalar(x_axis, diagonal, next_n);
         #elif defined(__ARM_NEON)
@@ -442,11 +439,7 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
     // flap back
     dist[cord_to_idx(diagonal, short_str.size())] = static_cast<uint32_t>(diagonal);
     
-    #ifdef __AVX2__
-    auto next_n = do_avx(flap_back, diagonal, 0);
-    next_n = do_sse(flap_back, diagonal, next_n);
-    do_scalar(flap_back, diagonal, next_n);
-    #elif defined(__SSE4_1__) || defined(__AVX__)
+    #if defined(__SSE4_1__) || defined(__AVX__)
     auto next_n = do_sse(flap_back, diagonal, 0);
     do_scalar(flap_back, diagonal, next_n);
     #elif defined(__ARM_NEON)
@@ -462,11 +455,7 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
         if(diagonal <= long_str.size()){
             dist[cord_to_idx(diagonal, short_str.size())] = static_cast<uint32_t>(diagonal);
         }
-        #ifdef __AVX2__
-        auto next_n = do_avx(y_axis, diagonal, 0);
-        next_n = do_sse(y_axis, diagonal, next_n);
-        do_scalar(y_axis, diagonal, next_n);
-        #elif defined(__SSE4_1__) || defined(__AVX__)
+        #if defined(__SSE4_1__) || defined(__AVX__)
         auto next_n = do_sse(y_axis, diagonal, 0);
         do_scalar(y_axis, diagonal, next_n);
         #elif defined(__ARM_NEON)
