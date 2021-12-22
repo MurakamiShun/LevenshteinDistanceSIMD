@@ -103,64 +103,55 @@ uint32_t levenshtein_distance_simd_backward_and_forward(const Container& short_s
      */
 
     #if defined(__SSE4_1__) || defined(__AVX__)
-    constexpr auto reserve_short_size = 12;
-    constexpr auto reserve_long_size = 16;
+    constexpr auto reserve_short_size = 30;
+    constexpr auto reserve_long_size = 30;
     struct alignas(16) x2int : std::array<uint64_t, 2>{};
     #elif defined(__ARM_NEON)
     constexpr auto reserve_short_size = 12;
     constexpr auto reserve_long_size = 24;
     struct alignas(16) x2int : std::array<uint32_t, 2>{};
     #endif
+
+    const auto reserve_and_get_ptr = [](const auto size, auto& array, auto& vec){
+        if(array.size() >= size) return array.data();
+        vec.resize(size);
+        return vec.data();
+    };
     std::array<x2int, reserve_short_size*2+2> data_array;
     std::vector<x2int> data_vec;
-    x2int* const data = [&](){
-        if(reserve_short_size < short_str.size()){
-            data_vec.resize(short_str.size()*2+2);
-            return data_vec.data();
-        }
-        else{
-            return data_array.data();
-        }
-    }();
     std::array<x2int, reserve_short_size> short_str_copy_array;
     std::array<x2int, reserve_long_size> long_str_copy_array;
     std::vector<x2int> short_str_copy_vec;
     std::vector<x2int> long_str_copy_vec;
-    x2int* const short_str_copy = [&](){
-        if(reserve_short_size < short_str.size()){
-            short_str_copy_vec.resize(short_str.size());
-            return short_str_copy_vec.data();
+
+    x2int* const data = reserve_and_get_ptr(short_str.size()*2+2, data_array, data_vec);
+    x2int* const short_str_copy = reserve_and_get_ptr(short_str.size(), short_str_copy_array, short_str_copy_vec);
+    x2int* const long_str_copy = reserve_and_get_ptr(long_str.size(), long_str_copy_array, long_str_copy_vec);
+
+    const auto dup_and_reverse = [](const auto& str, x2int* copy_ptr){
+        for(std::size_t i = 0, r = str.size() - 1; i < str.size()/2 + (str.size()&1); ++i, --r){
+            #if defined(__SSE4_1__) || defined(__AVX__)
+            const auto v = _mm_set_epi64x(str[i], str[r]);
+            _mm_store_si128(
+                reinterpret_cast<__m128i*>(&copy_ptr[i]),
+                v
+            );
+            _mm_store_si128(
+                reinterpret_cast<__m128i*>(&copy_ptr[r]),
+                _mm_shuffle_epi32(v, 0b01001110)
+            );
+            #elif defined(__ARM_NEON)
+            const uint32x2_t v = { str[r], str[i] };
+            vst1_u32(&copy_ptr[i][0], v);
+            vst1_u32(&copy_ptr[r][0], vrev64_u32(v));
+            #endif
         }
-        else{
-            return short_str_copy_array.data();
-        }
-    }();
-    x2int* const long_str_copy = [&](){
-        if(reserve_long_size < long_str.size()){
-            long_str_copy_vec.resize(long_str.size());
-            return long_str_copy_vec.data();
-        }
-        else{
-            return long_str_copy_array.data();
-        }
-    }();
+    };
+
+    dup_and_reverse(short_str, short_str_copy);
+    dup_and_reverse(long_str, long_str_copy);
+
     const auto is_odd = long_str.size()&1;
-    
-    for(std::size_t i = 0, r = short_str.size() - 1; i < short_str.size()/2 + (short_str.size()&1); ++i, --r){
-        short_str_copy[i] = x2int{
-            static_cast<typename x2int::value_type>(short_str[r]),
-            static_cast<typename x2int::value_type>(short_str[i])
-        };
-        short_str_copy[r] = x2int{ short_str_copy[i][1], short_str_copy[i][0] };
-    }
-    
-    for(std::size_t i = 0, r = long_str.size() - 1; i < long_str.size()/2 + is_odd; ++i, --r){
-        long_str_copy[i] = x2int{
-            static_cast<typename x2int::value_type>(long_str[r]),
-            static_cast<typename x2int::value_type>(long_str[i])
-        };
-        long_str_copy[r] = x2int{ long_str_copy[i][1], long_str_copy[i][0] };
-    }
     
     #if defined(__SSE4_1__) || defined(__AVX__)
     for(std::size_t x = 0; x <= short_str.size(); ++x){
@@ -175,6 +166,7 @@ uint32_t levenshtein_distance_simd_backward_and_forward(const Container& short_s
 
         auto latest_set = _mm_set1_epi64x(y);
         _mm_store_si128(reinterpret_cast<__m128i*>(&data[y&1]), latest_set);
+
         for(std::size_t x = 0; x < short_str.size(); ++x){
             const auto short_chars = _mm_load_si128(reinterpret_cast<__m128i*>(&short_str_copy[x]));
             const auto del = _mm_add_epi64(latest_set, _mm_set1_epi64x(1));
@@ -234,7 +226,7 @@ uint32_t levenshtein_distance_simd_backward_and_forward(const Container& short_s
         }
     }
     #endif
-    
+
     const auto y = long_str.size()/2;
     auto min_value = data[(y+is_odd)&1][1] + data[short_str.size()*2 + (y&1)][0];
     for(std::size_t x = 1; x <= short_str.size(); ++x){
@@ -469,35 +461,6 @@ uint32_t levenshtein_distance_diagonal(const Container& short_str_view, const Co
     return dist[cord_to_idx(short_str.size() + long_str.size(), 0)];
 }
 } // namespace detail
-
-template<typename Container>
-uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2){
-    static_assert(
-        sizeof(typename Container::value_type) == sizeof(int32_t)
-        || sizeof(typename Container::value_type) == sizeof(int16_t)
-        || sizeof(typename Container::value_type) == sizeof(int8_t),
-    "unsuported value type");
-    if(str1.size() + str2.size() > static_cast<typename Container::size_type>(std::numeric_limits<int32_t>::max())){
-        throw std::runtime_error("Given container size is too big.");
-    }
-    const auto [short_str_view, long_str_view] = (str1.size() < str2.size() ? std::tie(str1,str2) : std::tie(str2, str1));
-    
-    if(long_str_view.size() < 8) return detail::levenshtein_distance_very_small(short_str_view, long_str_view);
-    #if defined(__SSE4_1__) || defined(__AVX__)
-    if(short_str_view.size() < 24){
-        return detail::levenshtein_distance_simd_backward_and_forward(short_str_view, long_str_view);
-    }
-    return detail::levenshtein_distance_diagonal(short_str_view, long_str_view);
-    #elif defined(__ARM_NEON)
-    if(short_str_view.size() < 32){
-        return detail::levenshtein_distance_simd_backward_and_forward(short_str_view, long_str_view);
-    }
-    return detail::levenshtein_distance_diagonal(short_str_view, long_str_view);
-    #else
-    return levenshtein_distance_nosimd(short_str_view, long_str_view);
-    #endif
-}
-
 template<typename Container>
 uint32_t levenshtein_distance_nosimd(const Container& str1, const Container& str2){
     const auto [short_str, long_str] = (str1.size() < str2.size() ? std::tie(str1,str2) : std::tie(str2, str1));
@@ -538,5 +501,32 @@ uint32_t levenshtein_distance_nosimd(const Container& str1, const Container& str
         }
     }
     return dist(short_str.size(), long_str.size());
+}
+template<typename Container>
+uint32_t levenshtein_distance_simd(const Container& str1, const Container& str2){
+    static_assert(
+        sizeof(typename Container::value_type) == sizeof(int32_t)
+        || sizeof(typename Container::value_type) == sizeof(int16_t)
+        || sizeof(typename Container::value_type) == sizeof(int8_t),
+    "unsuported value type");
+    if(str1.size() + str2.size() > static_cast<typename Container::size_type>(std::numeric_limits<int32_t>::max())){
+        throw std::runtime_error("Given container size is too big.");
+    }
+    const auto [short_str_view, long_str_view] = (str1.size() < str2.size() ? std::tie(str1,str2) : std::tie(str2, str1));
+    
+    if(long_str_view.size() < 8) return detail::levenshtein_distance_very_small(short_str_view, long_str_view);
+    #if defined(__SSE4_1__) || defined(__AVX__)
+    if(short_str_view.size() < 24){
+        return detail::levenshtein_distance_simd_backward_and_forward(short_str_view, long_str_view);
+    }
+    return detail::levenshtein_distance_diagonal(short_str_view, long_str_view);
+    #elif defined(__ARM_NEON)
+    if(short_str_view.size() < 32){
+        return detail::levenshtein_distance_simd_backward_and_forward(short_str_view, long_str_view);
+    }
+    return detail::levenshtein_distance_diagonal(short_str_view, long_str_view);
+    #else
+    return levenshtein_distance_nosimd(short_str_view, long_str_view);
+    #endif
 }
 } // namespace LevenshteinDistansSIMD
